@@ -1111,25 +1111,40 @@ def backfill_history(api_supports_history: bool):
         print(f"   → {d}")
 
     if not api_supports_history:
-        # probe 偵測為不支援，但仍嘗試下載（probe 可能因日期格式問題誤判）
-        print(
-            "\n   ⚠️  [偵錯] probe 顯示 API 可能不支援歷史查詢，"
-            "但仍嘗試使用民國年格式補足歷史資料..."
-        )
+        # API 只提供最新一週資料，歷史日期查不到
+        # 僅嘗試補足「本週」，其餘歷史週待每週自動累積
+        latest_sat = get_latest_saturday().strftime("%Y-%m-%d")
+        if latest_sat not in missing_dates:
+            print("   ✅ 本週資料已在快取，無需補足")
+            return
 
-    # 依序補足缺少的週別（無論 probe 結果，皆嘗試；個別失敗時跳過）
+        print(f"   📥 下載本週資料至快取：{latest_sat}")
+        target_dt = datetime.strptime(latest_sat, "%Y-%m-%d")
+        try:
+            df, week_date = download_tdcc_csv(
+                target_date=target_dt,
+                api_supports_history=True
+            )
+            clean_df = clean_market_data(df, week_date)
+            ratio_df = calculate_holder_ratio(clean_df)
+            update_excel_history(ratio_df, clean_df)
+            print(f"   ✅ 本週快取補足成功")
+        except RuntimeError as e:
+            print(f"   ⚠️  本週快取補足失敗，由主流程重試：{e}")
+        return
+
+    # API 支援歷史查詢（目前 TDCC 不支援，此段保留供未來使用）
     print(f"\n   開始逐週補足歷史資料...")
     succeeded = 0
     for i, date_str in enumerate(missing_dates, 1):
         print(f"\n   [{i}/{len(missing_dates)}] 補足歷史資料：{date_str}")
         target_dt = datetime.strptime(date_str, "%Y-%m-%d")
-        # 每次請求前等待，避免對 TDCC 伺服器造成過快的連續請求
         if i > 1:
             time.sleep(3)
         try:
             df, week_date = download_tdcc_csv(
                 target_date=target_dt,
-                api_supports_history=True   # 強制嘗試，不受 probe 結果影響
+                api_supports_history=True
             )
             clean_df  = clean_market_data(df, week_date)
             ratio_df  = calculate_holder_ratio(clean_df)
@@ -1169,19 +1184,13 @@ def main():
     ensure_dirs()
 
     # ── 偵錯：探測 TDCC API 歷史查詢能力 ─────────────────────────
-    api_supports_history = probe_tdcc_historical_support()
+    # TDCC API 不支援歷史資料查詢（每次都只回傳最新一週）
+    # 跳過 probe，直接設為 False，節省 API 請求次數
+    api_supports_history = False
 
-    # probe 結束後稍作等待，避免連續請求觸發伺服器限流
-    print("   ⏳ 等待 5 秒後繼續...")
-    time.sleep(5)
-
-    # ── 補足歷史資料（首次執行或資料不足時）──────────────────────
-    print("\n[補足檢查] 確認歷史資料完整性...")
+    # ── 補足：僅確認本週快取是否存在 ─────────────────────────────
+    print("\n[補足檢查] 確認本週資料快取...")
     backfill_history(api_supports_history)
-
-    # 補足結束後稍作等待，讓伺服器從連續請求中恢復
-    print("\n   ⏳ 補足完成，等待 5 秒後繼續主流程...")
-    time.sleep(5)
 
     # ── 主流程：本週資料 ──────────────────────────────────────────
     week_date         = None
