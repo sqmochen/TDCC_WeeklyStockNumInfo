@@ -38,6 +38,11 @@ jobs:
           git add output/data/
           git add output/summary/
           git diff --staged --quiet || git commit -m "自動更新：TDCC 週報 $(TZ=Asia/Taipei date +'%Y-%m-%d')"
-          git fetch origin
-          git rebase origin/${GITHUB_REF_NAME}
-          git push origin HEAD:${GITHUB_REF_NAME}
+          # 重試迴圈：每次重新 fetch + rebase 再 push，最多嘗試 5 次
+          for i in 1 2 3 4 5; do
+            echo "=== Push 嘗試 $i/5 ==="
+            git fetch origin ${GITHUB_REF_NAME}
+            git rebase origin/${GITHUB_REF_NAME} || git rebase --abort
+            git push origin HEAD:${GITHUB_REF_NAME} && break
+            [ $i -lt 5 ] && sleep $((i * 10)) || exit 1
+          done
