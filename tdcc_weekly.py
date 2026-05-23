@@ -1121,12 +1121,6 @@ def backfill_history(api_supports_history: bool):
     print(f"\n   開始逐週補足歷史資料...")
     succeeded = 0
     for i, date_str in enumerate(missing_dates, 1):
-        # 跳過本週（由主流程處理）
-        latest_sat = get_latest_saturday().strftime("%Y-%m-%d")
-        if date_str == latest_sat:
-            print(f"   [{i}/{len(missing_dates)}] {date_str} 為本週，由主流程處理")
-            continue
-
         print(f"\n   [{i}/{len(missing_dates)}] 補足歷史資料：{date_str}")
         target_dt = datetime.strptime(date_str, "%Y-%m-%d")
         # 每次請求前等待，避免對 TDCC 伺服器造成過快的連續請求
@@ -1176,6 +1170,10 @@ def main():
 
     # ── 偵錯：探測 TDCC API 歷史查詢能力 ─────────────────────────
     api_supports_history = probe_tdcc_historical_support()
+
+    # probe 結束後稍作等待，避免連續請求觸發伺服器限流
+    print("   ⏳ 等待 5 秒後繼續...")
+    time.sleep(5)
 
     # ── 補足歷史資料（首次執行或資料不足時）──────────────────────
     print("\n[補足檢查] 確認歷史資料完整性...")
