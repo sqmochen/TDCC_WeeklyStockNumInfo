@@ -35,14 +35,17 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add output/data/
-          git add output/summary/
+          # 先備份 Python 產生的輸出檔（reset 前）
+          mkdir -p /tmp/tdcc_output
+          cp -r output/data output/summary /tmp/tdcc_output/ 2>/dev/null || true
+          # 取得最新 remote 狀態，reset 到 remote HEAD（避免 rebase 競爭問題）
+          git fetch origin
+          git reset --hard origin/${GITHUB_REF_NAME}
+          # 還原輸出檔
+          mkdir -p output/data output/summary
+          cp -r /tmp/tdcc_output/data/. output/data/ 2>/dev/null || true
+          cp -r /tmp/tdcc_output/summary/. output/summary/ 2>/dev/null || true
+          # Commit（若有新資料）並 fast-forward push
+          git add output/data/ output/summary/
           git diff --staged --quiet || git commit -m "自動更新：TDCC 週報 $(TZ=Asia/Taipei date +'%Y-%m-%d')"
-          # 重試迴圈：每次重新 fetch + rebase 再 push，最多嘗試 5 次
-          for i in 1 2 3 4 5; do
-            echo "=== Push 嘗試 $i/5 ==="
-            git fetch origin ${GITHUB_REF_NAME}
-            git rebase origin/${GITHUB_REF_NAME} || git rebase --abort
-            git push origin HEAD:${GITHUB_REF_NAME} && break
-            [ $i -lt 5 ] && sleep $((i * 10)) || exit 1
-          done
+          git push origin HEAD:${GITHUB_REF_NAME}
