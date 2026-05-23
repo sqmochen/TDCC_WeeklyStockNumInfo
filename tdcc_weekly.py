@@ -13,6 +13,7 @@
 
 import os
 import sys
+import time
 import requests
 import pandas as pd
 import openpyxl
@@ -305,11 +306,27 @@ def _parse_tdcc_response(text: str) -> pd.DataFrame | None:
     Returns:
         解析後的 DataFrame，失敗則回傳 None
     """
+    if not text or not text.strip():
+        print("   🔍 [偵錯] API 回傳空字串")
+        return None
+
+    # 若回傳 HTML（錯誤頁或維護頁），直接判定失敗
+    stripped = text.strip()
+    if stripped.lower().startswith("<!") or stripped.lower().startswith("<html"):
+        preview = stripped[:300].replace("\n", " ")
+        print(f"   🔍 [偵錯] API 回傳 HTML（非 CSV）：{preview}")
+        return None
+
     try:
         # TDCC 回傳的是 CSV 格式，直接用 pandas 讀取
         df = pd.read_csv(StringIO(text))
-        return df if not df.empty else None
-    except Exception:
+        if df.empty:
+            print(f"   🔍 [偵錯] CSV 解析後為空，前300字元：{stripped[:300]}")
+            return None
+        return df
+    except Exception as e:
+        preview = stripped[:300].replace("\n", " ")
+        print(f"   🔍 [偵錯] CSV 解析失敗（{e}），前300字元：{preview}")
         return None
 
 
@@ -383,34 +400,51 @@ def download_tdcc_csv(
         url = TDCC_URL
         print(f"   📡 下載本週資料：{week_date}（{url}）")
 
-    try:
-        resp = requests.get(url, headers=REQUEST_HEADERS, timeout=TIMEOUT_SECONDS)
-    except requests.exceptions.Timeout:
-        raise RuntimeError(
-            f"網路請求逾時（超過 {TIMEOUT_SECONDS} 秒）\n"
-            "建議動作：請確認網路連線後重新執行"
-        )
-    except requests.exceptions.ConnectionError as e:
-        raise RuntimeError(
-            f"無法連線至 TDCC 伺服器\n"
-            f"原因：{e}\n"
-            "建議動作：請確認網路連線後重新執行"
-        )
+    # 嘗試下載，最多重試 3 次（每次間隔 5 秒，避免限流）
+    # 若本週無日期參數的 URL 失敗，也嘗試帶民國年格式的 URL
+    urls_to_try = [url]
+    if not is_historical:
+        # 本週也試帶民國年格式的 URL，作為後備
+        urls_to_try.append(TDCC_URL_TEMPLATE.format(date=roc_date_str))
 
-    # 檢查 HTTP 狀態碼
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"TDCC 伺服器回傳異常狀態碼：{resp.status_code}\n"
-            f"請求網址：{url}\n"
-            "建議動作：請稍後再試，或確認 TDCC 網站是否正常運作"
-        )
+    df = None
+    last_error = None
+    for attempt_url in urls_to_try:
+        for retry in range(3):
+            if retry > 0:
+                wait = 5 * retry
+                print(f"   ⏳ [重試 {retry}/2] 等待 {wait} 秒後重試...")
+                time.sleep(wait)
+            try:
+                print(f"   📡 請求：{attempt_url}")
+                resp = requests.get(
+                    attempt_url, headers=REQUEST_HEADERS,
+                    timeout=TIMEOUT_SECONDS
+                )
+                if resp.status_code != 200:
+                    last_error = f"HTTP {resp.status_code}"
+                    print(f"   ⚠️  HTTP {resp.status_code}，繼續重試")
+                    continue
+                df = _parse_tdcc_response(resp.text)
+                if df is not None and not df.empty:
+                    break  # 成功
+                last_error = "資料為空"
+            except requests.exceptions.Timeout:
+                last_error = f"逾時（超過 {TIMEOUT_SECONDS} 秒）"
+                print(f"   ⚠️  請求逾時，繼續重試")
+            except requests.exceptions.ConnectionError as e:
+                last_error = f"連線失敗：{e}"
+                print(f"   ⚠️  連線失敗，繼續重試")
+        if df is not None and not df.empty:
+            break
+        print(f"   ⚠️  URL {attempt_url} 所有重試均失敗，嘗試下一組 URL")
+        time.sleep(3)
 
-    # 解析回傳資料
-    df = _parse_tdcc_response(resp.text)
     if df is None or df.empty:
         raise RuntimeError(
-            f"下載成功但資料為空，可能是該日期（{week_date}）無資料\n"
-            "建議動作：確認該週六是否為 TDCC 公告日"
+            f"下載失敗（{last_error}），可能是該日期（{week_date}）無資料\n"
+            "建議動作：確認該週六是否為 TDCC 公告日\n"
+            "建議動作：請確認網路連線後重新執行"
         )
 
     # 偵錯：確認實際回傳的資料日期是否符合預期
@@ -1095,6 +1129,9 @@ def backfill_history(api_supports_history: bool):
 
         print(f"\n   [{i}/{len(missing_dates)}] 補足歷史資料：{date_str}")
         target_dt = datetime.strptime(date_str, "%Y-%m-%d")
+        # 每次請求前等待，避免對 TDCC 伺服器造成過快的連續請求
+        if i > 1:
+            time.sleep(3)
         try:
             df, week_date = download_tdcc_csv(
                 target_date=target_dt,
@@ -1143,6 +1180,10 @@ def main():
     # ── 補足歷史資料（首次執行或資料不足時）──────────────────────
     print("\n[補足檢查] 確認歷史資料完整性...")
     backfill_history(api_supports_history)
+
+    # 補足結束後稍作等待，讓伺服器從連續請求中恢復
+    print("\n   ⏳ 補足完成，等待 5 秒後繼續主流程...")
+    time.sleep(5)
 
     # ── 主流程：本週資料 ──────────────────────────────────────────
     week_date         = None
