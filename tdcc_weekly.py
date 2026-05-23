@@ -163,6 +163,17 @@ def ensure_dirs():
         d.mkdir(parents=True, exist_ok=True)
 
 
+def _to_roc_date(date: datetime) -> str:
+    """
+    將西曆日期轉換為民國年格式（TDCC API 日期參數所需格式）。
+
+    TDCC open data API 的 date 參數採用民國年：
+      西曆 2026-05-23 → 民國115年05月23日 → "1150523"
+    """
+    roc_year = date.year - 1911
+    return f"{roc_year}{date.strftime('%m%d')}"
+
+
 # =============================================================================
 # 偵錯工具：TDCC API 歷史日期查詢能力探測
 # =============================================================================
@@ -204,10 +215,13 @@ def probe_tdcc_historical_support() -> bool:
             print("   ⚠️  無法取得最新資料，跳過 API 探測，預設為不支援歷史查詢")
             return False
 
-        # 用「4週前的週六」測試歷史查詢
+        # 用「4週前的週六」測試歷史查詢（TDCC API 使用民國年格式）
         test_date = get_latest_saturday() - timedelta(weeks=4)
-        test_date_str = test_date.strftime("%Y%m%d")
-        test_url = TDCC_URL_TEMPLATE.format(date=test_date_str)
+        test_date_roc  = _to_roc_date(test_date)
+        test_date_greg = test_date.strftime("%Y%m%d")
+        test_url = TDCC_URL_TEMPLATE.format(date=test_date_roc)
+        print(f"   🔍 [偵錯] 以民國年格式測試歷史查詢：{test_date_roc}（西曆 {test_date_greg}）")
+        print(f"      URL：{test_url}")
 
         resp_hist = requests.get(
             test_url,
@@ -333,6 +347,7 @@ def download_tdcc_csv(
 
     week_date     = target_date.strftime("%Y-%m-%d")
     week_date_fmt = target_date.strftime("%Y%m%d")
+    roc_date_str  = _to_roc_date(target_date)
     cache_path    = RAW_DIR / f"TDCC_{week_date_fmt}.csv"
 
     # 這個步驟就像去超市購物前先確認購物清單是否已經存在，
@@ -359,9 +374,11 @@ def download_tdcc_csv(
         )
 
     # 決定使用哪個 URL
+    # 歷史資料使用民國年格式（TDCC API 正確的 date 參數格式）
     if is_historical:
-        url = TDCC_URL_TEMPLATE.format(date=week_date_fmt)
-        print(f"   📡 下載歷史資料：{week_date}（{url}）")
+        url = TDCC_URL_TEMPLATE.format(date=roc_date_str)
+        print(f"   📡 下載歷史資料：{week_date}（民國年 {roc_date_str}）")
+        print(f"      URL：{url}")
     else:
         url = TDCC_URL
         print(f"   📡 下載本週資料：{week_date}（{url}）")
@@ -397,10 +414,32 @@ def download_tdcc_csv(
         )
 
     # 偵錯：確認實際回傳的資料日期是否符合預期
+    # 若民國年格式回傳錯誤日期，嘗試改用西曆格式作為後備
     date_col = _detect_date_column(df)
     if date_col and is_historical:
         actual_dates = df[date_col].astype(str).unique()
         print(f"   🔍 [偵錯] 回傳資料日期欄位值：{actual_dates[:3]}...")
+
+        # 如果回傳的日期欄位包含民國年格式，確認是否為預期週別
+        # 若回傳資料明顯與預期不符（日期相同或只有最新週），嘗試西曆格式
+        actual_set = set(str(d).strip() for d in actual_dates)
+        if roc_date_str not in actual_set and week_date_fmt not in actual_set:
+            print(f"   ⚠️  [偵錯] 民國年格式未命中，嘗試西曆格式：{week_date_fmt}")
+            fallback_url = TDCC_URL_TEMPLATE.format(date=week_date_fmt)
+            try:
+                fb_resp = requests.get(
+                    fallback_url, headers=REQUEST_HEADERS,
+                    timeout=TIMEOUT_SECONDS
+                )
+                if fb_resp.status_code == 200:
+                    fb_df = _parse_tdcc_response(fb_resp.text)
+                    if fb_df is not None and not fb_df.empty:
+                        fb_dates = set(fb_df[date_col].astype(str).str.strip().unique())
+                        if fb_dates != actual_set:
+                            print(f"   ✅ [偵錯] 西曆格式回傳不同日期資料，改用此版本")
+                            df = fb_df
+            except Exception as fb_e:
+                print(f"   ⚠️  [偵錯] 西曆格式後備查詢失敗：{fb_e}")
 
     # 儲存至快取
     try:
@@ -1038,21 +1077,13 @@ def backfill_history(api_supports_history: bool):
         print(f"   → {d}")
 
     if not api_supports_history:
-        # API 不支援歷史查詢：列出缺少的週別讓使用者知悉，
-        # 目前週的資料由主流程正常下載，其餘只能等待每週自然累積
+        # probe 偵測為不支援，但仍嘗試下載（probe 可能因日期格式問題誤判）
         print(
-            "\n   ⚠️  [偵錯] TDCC API 不支援歷史日期查詢，"
-            "無法自動補足以下各週資料："
+            "\n   ⚠️  [偵錯] probe 顯示 API 可能不支援歷史查詢，"
+            "但仍嘗試使用民國年格式補足歷史資料..."
         )
-        for d in missing_dates:
-            print(f"        {d}")
-        print(
-            "   建議：程式將從本週起逐週累積，"
-            f"約 {len(missing_dates)} 週後資料將達到完整13週。"
-        )
-        return
 
-    # API 支援歷史查詢：依序補足缺少的週別
+    # 依序補足缺少的週別（無論 probe 結果，皆嘗試；個別失敗時跳過）
     print(f"\n   開始逐週補足歷史資料...")
     succeeded = 0
     for i, date_str in enumerate(missing_dates, 1):
@@ -1067,7 +1098,7 @@ def backfill_history(api_supports_history: bool):
         try:
             df, week_date = download_tdcc_csv(
                 target_date=target_dt,
-                api_supports_history=True
+                api_supports_history=True   # 強制嘗試，不受 probe 結果影響
             )
             clean_df  = clean_market_data(df, week_date)
             ratio_df  = calculate_holder_ratio(clean_df)
