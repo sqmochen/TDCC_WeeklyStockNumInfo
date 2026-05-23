@@ -10,6 +10,8 @@ on:
 jobs:
   run-weekly-report:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: 取出 repo 最新內容
