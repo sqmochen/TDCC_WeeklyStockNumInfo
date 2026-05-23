@@ -1,0 +1,41 @@
+name: TDCC 大戶持股比週報
+
+on:
+  schedule:
+    # 每週日台灣時間 09:00 執行（UTC+8，換算為 UTC 01:00）
+    - cron: '0 1 * * 0'
+  workflow_dispatch:
+    # 允許手動在 GitHub 網頁上觸發執行（用於測試或補跑）
+
+jobs:
+  run-weekly-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 取出 repo 最新內容
+        uses: actions/checkout@v4
+
+      - name: 設定 Python 環境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安裝必要套件
+        run: pip install -r requirements.txt
+
+      - name: 建立輸出資料夾
+        run: mkdir -p output/raw output/data output/summary
+
+      - name: 執行 TDCC 週報腳本
+        run: python tdcc_weekly.py
+
+      - name: 將產出結果存回 GitHub
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          # 只 commit output/ 資料夾（排除暫存的 raw/ 原始 CSV）
+          git add output/data/
+          git add output/summary/
+          # 若有變動才 commit，避免無資料時產生空 commit
+          git diff --staged --quiet || git commit -m "自動更新：TDCC 週報 $(date +'%Y-%m-%d' -d 'TZ=\"Asia/Taipei\" now')"
+          git push

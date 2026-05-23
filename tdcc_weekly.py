@@ -11,6 +11,7 @@
 #   步驟6（輸出）→ 包裝出貨（輸出可上傳 NotebookLM 的分析摘要）
 # =============================================================================
 
+import os
 import sys
 import requests
 import pandas as pd
@@ -21,10 +22,20 @@ from io import StringIO
 
 # =============================================================================
 # 路徑設定
-# 說明：所有產出檔案統一放在使用者家目錄的 TDCC_Analysis 資料夾，
-#       避免因不同電腦的磁碟設定不同而找不到檔案。
+# 說明：程式會自動判斷執行環境，選擇對應的儲存位置。
+#       就像同一個員工在公司上班用公司電腦、在家用自己電腦，
+#       工作內容一樣，但存檔位置不同。
+#
+#   GitHub Actions（雲端自動執行）→ 存放在 repo 的 output/ 資料夾
+#   本機執行                      → 存放在家目錄的 TDCC_Analysis 資料夾
 # =============================================================================
-BASE_DIR    = Path.home() / "Documents" / "TDCC_Analysis"
+if os.environ.get("GITHUB_ACTIONS"):
+    # 雲端執行：GITHUB_WORKSPACE 是 GitHub Actions 提供的 repo 根目錄路徑
+    BASE_DIR = Path(os.environ.get("GITHUB_WORKSPACE", ".")) / "output"
+else:
+    # 本機執行：存放在使用者家目錄，方便在自己電腦上找到
+    BASE_DIR = Path.home() / "Documents" / "TDCC_Analysis"
+
 RAW_DIR     = BASE_DIR / "raw"
 DATA_DIR    = BASE_DIR / "data"
 SUMMARY_DIR = BASE_DIR / "summary"

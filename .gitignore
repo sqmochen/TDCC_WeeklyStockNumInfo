@@ -1,0 +1,14 @@
+# 原始 CSV 檔案體積大（每週約 5MB），不存入 repo
+output/raw/
+
+# Python 暫存檔
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
