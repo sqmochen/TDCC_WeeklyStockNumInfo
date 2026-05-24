@@ -31,7 +31,6 @@ jobs:
           echo "============================================"
           echo ""
           echo "[版本確認] 預期版本：v4（含 set+e retry loop，無 TZ date 參數）"
-          # 確認 workflow 檔案中確實含有版本標記
           if grep -q "WORKFLOW_VERSION: v4" .github/workflows/weekly.yml; then
             echo "✅ Workflow 版本確認正確：v4"
           else
