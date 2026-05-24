@@ -1,4 +1,5 @@
 name: TDCC 大戶持股比週報
+# WORKFLOW_VERSION: v4
 
 on:
   schedule:
@@ -16,6 +17,27 @@ jobs:
     steps:
       - name: 取出 repo 最新內容
         uses: actions/checkout@v4
+
+      - name: 確認 Workflow 版本與執行環境
+        run: |
+          echo "============================================"
+          echo "  WORKFLOW_VERSION: v4"
+          echo "  Commit SHA : $GITHUB_SHA"
+          echo "  Branch     : $GITHUB_REF_NAME"
+          echo "  Run ID     : $GITHUB_RUN_ID"
+          echo "  Run Number : $GITHUB_RUN_NUMBER"
+          echo "  Triggered  : $GITHUB_EVENT_NAME"
+          echo "  Date (UTC) : $(date +'%Y-%m-%d %H:%M:%S')"
+          echo "============================================"
+          echo ""
+          echo "[版本確認] 預期版本：v4（含 set+e retry loop，無 TZ date 參數）"
+          # 確認 workflow 檔案中確實含有版本標記
+          if grep -q "WORKFLOW_VERSION: v4" .github/workflows/weekly.yml; then
+            echo "✅ Workflow 版本確認正確：v4"
+          else
+            echo "❌ 警告：Workflow 檔案版本標記不符，可能使用了快取版本"
+            exit 1
+          fi
 
       - name: 設定 Python 環境
         uses: actions/setup-python@v5
@@ -41,7 +63,6 @@ jobs:
           cp -r output/data output/summary /tmp/tdcc_out/ 2>/dev/null || true
 
           # 重試迴圈：每次都 fetch 最新 remote，reset 後 commit 再 push
-          # 使用 set +e 讓 push 失敗時不立即終止腳本，而是繼續重試
           set +e
           SUCCESS=false
           for attempt in 1 2 3 4 5; do
